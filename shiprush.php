@@ -1,4 +1,5 @@
 <?php
+//phpcs:ignoreFile
 
 /*
 	Plugin Name: ShipRush
@@ -98,6 +99,9 @@ if ( is_woocommerce_active() ) {
 
 				// View Order deatils
 				add_action( 'add_meta_boxes', array( &$this, 'shiprush_button' ) );
+
+				// Add tracking support
+				add_filter( 'wc_shipment_tracking_get_providers' , array( &$this, 'register_shiprush_tracking' ) );
 					
 			}
 		
@@ -109,13 +113,81 @@ if ( is_woocommerce_active() ) {
 			function shiprush_button() {
 				add_meta_box( 'woocommerce-shiprush', __('ShipRush', 'WC_ShipRush'), array( &$this, 'shiprush_meta_box' ), 'shop_order', 'normal', 'high');
 			}
+		
+			/**
+			 * Add ShipRush support for WooCommerce Tracking plugin.
+			 *
+			 * @access public
+			 */
+			function register_shiprush_tracking( $providers ) {
+				$providers['United States']['Ship Rush'] = 'http://wwwapps.ups.com/WebTracking/processInputRequest?TypeOfInquiryNumber=T&InquiryNumber1=%1$s';
+				return $providers;
+
+			}
+		
+			/**
+			 * Check if order has mixed products.
+			 *
+			 * @access public
+			 */
+			public static function is_mixed_products( $wp_order ) {
+
+				if ( method_exists( $wp_order, 'get_items' ) ) {
+
+					$items = $wp_order->get_items();
+
+					if ( $items ) {
+
+						$excluded_products = array();
+						$cold_brew_qty     = get_option( 'options_hiline_cold_brew_products' );
+
+						if ( (int) $cold_brew_qty > 0 ) {
+
+							$acf_repeater_parent_name = 'options_hiline_cold_brew_products';
+							$acf_repeater_child_name  = 'hiline_cold_brew_product';
+
+							for ( $i = 0; $i < ( int ) $cold_brew_qty; $i++ ) { 
+
+								$cold_brew_id = get_option( "{$acf_repeater_parent_name}_{$i}_{$acf_repeater_child_name}" );
+								
+								$excluded_products[] = ( int ) $cold_brew_id;
+							}
+						}
+						
+						if ( $excluded_products ) {
+
+							foreach ( $items as $order_item_id => $order_item ) {
+
+								if ( ! in_array( $order_item->get_product_id(), $excluded_products ) ) {
+
+									return true;
+								}
+							}
+						}
+					}
+				}
+				
+				return false;
+			}
+			
+			/*
+			 * Setup order with tracking info.
+			 *
+			 * @access public
+			 */
+			public static function set_tracking_info( $tracking_info ) {
+
+				if ( function_exists( 'wc_st_add_tracking_number' ) ) {
+
+					return wc_st_add_tracking_number( $tracking_info['order_id'], $tracking_info['tracking_number'], $tracking_info['provider'], $tracking_info['date_shipped'] );
+				}
+			}
 
 			/*
 			 * Show the meta box for shiprush button the view order page
 			 *
 			 * @access public
 			 */
-			 
 			function shiprush_meta_box() {
 			
 				global $woocommerce, $post;
@@ -123,21 +195,45 @@ if ( is_woocommerce_active() ) {
 				//set this variable to true if you want the plugin to hit sandbox
         		$ifsbox = USE_SANDBOX;
 				
-				$order_id=$post->ID;
-				$order = new WC_Order($order_id);
+				$order_id      = $post->ID;
+				$order         = new WC_Order( $order_id );
 				
-				 if (isset($_POST['tnum'])) 
-				 {
-					$tracking_number = $_POST['tnum'];
-					// query to update tracking number of shipment
-					update_post_meta( $OrderNumber, '_tracking_number', $tracking_number );
-					update_post_meta( $OrderNumber, '_date_shipped', time() );
-					$shipped_on=date("m/d/Y");
-					$ship_comments="Shipped on $shipped_on and tracking number is $tracking_number";
-					$change_order_status="completed";
-					$order->update_status($change_order_status, $ship_comments );
+				if ( isset( $_POST['tnum'] ) ) {
+
+					$tracking_number = sanitize_text_field( $_POST['tnum'] );
+					$shipped_on      = date("m/d/Y");
+					$ship_comments   = "Shipped on $shipped_on and tracking number is $tracking_number";
+					$tracking_info   = array(
+						'order_id'        => $order_id,
+						'tracking_number' => $tracking_number,
+						'provider'        => 'Ship Rush',
+						'date_shipped'    => $shipped_on,
+					);
+
+					// If not part shipped and a mixed products.
+					if ( 'part-shipped' != $order->get_status() && $this->is_mixed_products( $order ) ) {
+
+						$change_order_status = 'part-shipped';
+					}
 					
-                 }
+					// If mixed products and already partially shipped.
+					elseif ( $this->is_mixed_products( $order ) && 'part-shipped' == $order->get_status() ) {
+
+						$change_order_status = 'completed';
+					}
+
+					// Not a mixed products.
+					else {
+
+						$change_order_status = 'completed';
+					}
+
+					// Original update for tracking number.
+					update_post_meta( $order_id, '_tracking_number', $tracking_number );
+					update_post_meta( $order_id, '_date_shipped', time() );
+					$this->set_tracking_info( $tracking_info );
+					$order->update_status( $change_order_status, $ship_comments );
+				}
 				
 				//Get order details
 				$order_date=$order->order_date;
@@ -386,6 +482,9 @@ if ( is_woocommerce_active() ) {
 					ReferredBy: \"WOOCOMMERCEPlugin-SRWeb-Build-XXXXXXX\",
 					Shipment: JSON.parse('".$shipment."'),
 					OnShipmentCompleted: function (data) {
+						// Debugging the response.
+						console.log(data);
+
 						var tNumber = data.Shipment.TrackingNumber; // post for tracking number and order number
 						jQuery.post(window.location.href, {tnum: tNumber});  
 						window.setTimeout(function(){window.location.reload()}, 3000);
