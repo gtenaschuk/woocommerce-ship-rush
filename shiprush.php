@@ -111,7 +111,7 @@ if ( is_woocommerce_active() ) {
 			 * @access public
 			 */
 			function shiprush_button() {
-				add_meta_box( 'woocommerce-shiprush', __('ShipRush', 'WC_ShipRush'), array( &$this, 'shiprush_meta_box' ), 'shop_order', 'normal', 'high');
+				add_meta_box( 'woocommerce-shiprush', __('ShipRush', 'WC_ShipRush'), array( &$this, 'shiprush_meta_box' ), 'shop_order', 'side', 'high');
 			}
 		
 			/**
@@ -168,6 +168,32 @@ if ( is_woocommerce_active() ) {
 				}
 				
 				return false;
+			}
+		
+			/**
+			 * Get an array of excluded product ids.
+			 *
+			 * @access public
+			 */
+			public static function get_excluded_product_ids() {
+
+				$excluded_products = array();
+				$cold_brew_qty     = get_option( 'options_hiline_cold_brew_products' );
+
+				if ( (int) $cold_brew_qty > 0 ) {
+
+					$acf_repeater_parent_name = 'options_hiline_cold_brew_products';
+					$acf_repeater_child_name  = 'hiline_cold_brew_product';
+
+					for ( $i = 0; $i < ( int ) $cold_brew_qty; $i++ ) { 
+
+						$cold_brew_id = get_option( "{$acf_repeater_parent_name}_{$i}_{$acf_repeater_child_name}" );
+						
+						$excluded_products[] = ( int ) $cold_brew_id;
+					}
+				}
+
+				return $excluded_products;
 			}
 			
 			/*
@@ -236,6 +262,7 @@ if ( is_woocommerce_active() ) {
 				}
 				
 				//Get order details
+				$order_number = $order->get_order_number();
 				$order_date=$order->order_date;
 				$total_paid_real=$order->order_total;
 				$weight_unit=get_option("woocommerce_weight_unit");
@@ -257,15 +284,22 @@ if ( is_woocommerce_active() ) {
 				$PkgLength="";
 				$PkgWidth="";
 				$PkgHeight="";
+				$excluded_products = $this->get_excluded_product_ids();
 				foreach ( $items as $item ) 
 				{
-						  $attributes="";
-						  if($item['product_id']>0)
-						  {
-							 $product_additional_details=get_product($item['product_id']);
-							 $item_meta = new WC_Order_Item_Meta( $item['item_meta'] );
-							 $attributes=$item_meta->display( true, true );
-						  }
+					$attributes="";
+
+					if ( $item['product_id'] > 0 && in_array( (int) $item['product_id'], $excluded_products ) ) {
+
+						$product_additional_details = get_product( $item['product_id'] );
+						$item_meta                  = new WC_Order_Item_Meta( $item['item_meta'] );
+						$attributes                 = $item_meta->display( true, true );
+
+					} else {
+
+						continue;
+					}
+
 						  if(strlen($attributes)>0) 
 						  {
 							$product_array[$counter]['name']=$item['name'] . ' - ' .$item_meta->display( true, true );														
@@ -402,7 +436,7 @@ if ( is_woocommerce_active() ) {
 					'Packages' => $packages,				
 					'Commodities'=>$commodities,
 					'Order'=>array(
-						'OrderNum' => $order_id,  
+						'OrderNum' => $order_number,  
 						'Total' => $total_paid_real,  
 						'ShippingPaidAmount' => $shipping_charges, 
 						'OrderDate' => $order_date,
